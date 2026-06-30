@@ -7,11 +7,14 @@ from pathlib import Path
 from typing import Mapping
 
 from nt_presigned_io.core import (
+    DownloadBytesResult,
     DownloadResult,
     HttpResponse,
     PresignedIoError,
+    download_bytes_from_presigned_url,
     download_to_directory,
     resolve_file_path,
+    upload_bytes_to_presigned_url,
     upload_file_to_presigned_url,
 )
 
@@ -65,6 +68,27 @@ class PresignedIoCoreTest(unittest.TestCase):
             self.assertEqual(Path(result.path).read_bytes(), b"png-bytes")
             self.assertEqual(Path(result.path).parent, Path(tmp).resolve())
 
+    def test_download_bytes_returns_body_without_writing_a_file(self) -> None:
+        transport = FakeTransport()
+        transport.get_responses["https://signed.example.com/input.png?token=secret"] = HttpResponse(
+            status_code=200,
+            body=b"png-bytes",
+            headers={"content-type": "image/png; charset=binary"},
+        )
+
+        result = download_bytes_from_presigned_url(
+            "https://signed.example.com/input.png?token=secret",
+            filename="../unsafe name.png",
+            transport=transport,
+            timeout_seconds=5,
+        )
+
+        self.assertIsInstance(result, DownloadBytesResult)
+        self.assertEqual(result.filename, "unsafe_name.png")
+        self.assertEqual(result.content_type, "image/png")
+        self.assertEqual(result.byte_count, 9)
+        self.assertEqual(result.body, b"png-bytes")
+
     def test_download_rejects_failed_status_without_writing_partial_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transport = FakeTransport()
@@ -116,6 +140,37 @@ class PresignedIoCoreTest(unittest.TestCase):
             self.assertEqual(decoded["content_type"], "video/mp4")
             self.assertEqual(decoded["public_url"], "https://cdn.example.com/output.mp4")
             self.assertEqual(decoded["status"], "uploaded")
+
+    def test_upload_bytes_puts_bytes_and_returns_json_manifest_without_path(self) -> None:
+        transport = FakeTransport()
+
+        manifest = upload_bytes_to_presigned_url(
+            b"video-bytes",
+            "https://signed.example.com/output.mp4?token=secret",
+            filename="../clip.mp4",
+            content_type="video/mp4",
+            public_url="https://cdn.example.com/output.mp4",
+            transport=transport,
+            timeout_seconds=5,
+        )
+
+        self.assertEqual(
+            transport.put_calls,
+            [
+                {
+                    "url": "https://signed.example.com/output.mp4?token=secret",
+                    "data": b"video-bytes",
+                    "headers": {"content-type": "video/mp4"},
+                }
+            ],
+        )
+        decoded = json.loads(manifest)
+        self.assertEqual(decoded["filename"], "clip.mp4")
+        self.assertEqual(decoded["bytes"], 11)
+        self.assertEqual(decoded["content_type"], "video/mp4")
+        self.assertEqual(decoded["public_url"], "https://cdn.example.com/output.mp4")
+        self.assertEqual(decoded["status"], "uploaded")
+        self.assertNotIn("path", decoded)
 
     def test_upload_rejects_non_file_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

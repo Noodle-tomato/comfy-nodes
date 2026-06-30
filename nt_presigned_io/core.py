@@ -32,6 +32,14 @@ class DownloadResult:
     byte_count: int
 
 
+@dataclass(frozen=True)
+class DownloadBytesResult:
+    body: bytes
+    filename: str
+    content_type: str
+    byte_count: int
+
+
 class Transport(Protocol):
     def get(self, url: str, timeout_seconds: float) -> HttpResponse:
         """Fetch a URL and return response bytes."""
@@ -116,6 +124,31 @@ def download_to_directory(
     )
 
 
+def download_bytes_from_presigned_url(
+    url: str,
+    *,
+    filename: str = "",
+    transport: Transport | None = None,
+    timeout_seconds: float = 60,
+) -> DownloadBytesResult:
+    if not url:
+        raise PresignedIoError("url is required")
+
+    safe_filename = sanitize_filename(filename or _filename_from_url(url))
+    http = transport or UrllibTransport()
+    response = http.get(url, timeout_seconds)
+    if response.status_code < 200 or response.status_code >= 300:
+        raise PresignedIoError(f"download failed with status {response.status_code}: {_body_preview(response.body)}")
+
+    content_type = _header_value(response.headers, "content-type") or guess_content_type(Path(safe_filename))
+    return DownloadBytesResult(
+        body=response.body,
+        filename=safe_filename,
+        content_type=normalize_content_type(content_type),
+        byte_count=len(response.body),
+    )
+
+
 def upload_file_to_presigned_url(
     file_path: str | Path,
     put_url: str,
@@ -144,6 +177,38 @@ def upload_file_to_presigned_url(
         "status": "uploaded",
         "filename": path.name,
         "path": str(path),
+        "bytes": len(body),
+        "content_type": resolved_content_type,
+        "public_url": public_url,
+    }
+    return json.dumps(manifest, sort_keys=True)
+
+
+def upload_bytes_to_presigned_url(
+    data: bytes,
+    put_url: str,
+    *,
+    filename: str = "output.bin",
+    content_type: str = "",
+    public_url: str = "",
+    transport: Transport | None = None,
+    timeout_seconds: float = 120,
+) -> str:
+    if not put_url:
+        raise PresignedIoError("put_url is required")
+
+    body = bytes(data)
+    safe_filename = sanitize_filename(filename)
+    resolved_content_type = normalize_content_type(content_type or guess_content_type(Path(safe_filename)))
+    headers = {"content-type": resolved_content_type} if resolved_content_type else {}
+    http = transport or UrllibTransport()
+    response = http.put(put_url, body, headers, timeout_seconds)
+    if response.status_code < 200 or response.status_code >= 300:
+        raise PresignedIoError(f"upload failed with status {response.status_code}: {_body_preview(response.body)}")
+
+    manifest = {
+        "status": "uploaded",
+        "filename": safe_filename,
         "bytes": len(body),
         "content_type": resolved_content_type,
         "public_url": public_url,
@@ -208,4 +273,3 @@ def _header_value(headers: Mapping[str, str], key: str) -> str:
 
 def _body_preview(body: bytes) -> str:
     return body[:200].decode("utf-8", errors="replace")
-
