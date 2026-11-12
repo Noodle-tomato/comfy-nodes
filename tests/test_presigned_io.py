@@ -13,6 +13,7 @@ from nt_presigned_io.core import (
     PresignedIoError,
     download_bytes_from_presigned_url,
     download_to_directory,
+    presigned_put_headers,
     resolve_file_path,
     upload_bytes_to_presigned_url,
     upload_file_to_presigned_url,
@@ -171,6 +172,77 @@ class PresignedIoCoreTest(unittest.TestCase):
         self.assertEqual(decoded["public_url"], "https://cdn.example.com/output.mp4")
         self.assertEqual(decoded["status"], "uploaded")
         self.assertNotIn("path", decoded)
+
+    def test_upload_bytes_to_azure_blob_sas_url_sends_block_blob_type(self) -> None:
+        transport = FakeTransport()
+        put_url = "https://stntstgyquuey.blob.core.windows.net/media/out/clip.mp4?sv=2025-01-05&sig=secret"
+
+        upload_bytes_to_presigned_url(
+            b"video-bytes",
+            put_url,
+            filename="clip.mp4",
+            content_type="video/mp4",
+            transport=transport,
+            timeout_seconds=5,
+        )
+
+        self.assertEqual(
+            transport.put_calls[0]["headers"],
+            {"content-type": "video/mp4", "x-ms-blob-type": "BlockBlob"},
+        )
+
+    def test_upload_file_to_azure_blob_sas_url_sends_block_blob_type(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "clip.mp4")
+            path.write_bytes(b"video-bytes")
+            transport = FakeTransport()
+
+            upload_file_to_presigned_url(
+                path,
+                "https://stntstgyquuey.blob.core.windows.net/media/out/clip.mp4?sv=2025-01-05&sig=secret",
+                content_type="video/mp4",
+                transport=transport,
+                timeout_seconds=5,
+            )
+
+            self.assertEqual(
+                transport.put_calls[0]["headers"],
+                {"content-type": "video/mp4", "x-ms-blob-type": "BlockBlob"},
+            )
+
+    def test_upload_bytes_to_s3_presigned_url_sends_no_azure_header(self) -> None:
+        transport = FakeTransport()
+        put_url = (
+            "https://noodletomato-media.s3.us-east-2.amazonaws.com/out/clip.mp4"
+            "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=secret"
+        )
+
+        upload_bytes_to_presigned_url(
+            b"video-bytes",
+            put_url,
+            filename="clip.mp4",
+            content_type="video/mp4",
+            transport=transport,
+            timeout_seconds=5,
+        )
+
+        self.assertEqual(transport.put_calls[0]["headers"], {"content-type": "video/mp4"})
+
+    def test_azure_header_depends_on_url_host_only(self) -> None:
+        self.assertEqual(
+            presigned_put_headers("https://ACCOUNT.Blob.Core.Windows.Net/media/a.mp4?sig=x", "video/mp4"),
+            {"content-type": "video/mp4", "x-ms-blob-type": "BlockBlob"},
+        )
+        self.assertEqual(
+            presigned_put_headers("https://account.r2.cloudflarestorage.com/media/a.mp4?X-Amz-Signature=x", ""),
+            {},
+        )
+        for lookalike in (
+            "https://blob.core.windows.net.example.com/media/a.mp4",
+            "https://example.com/blob.core.windows.net/a.mp4",
+            "https://example.com/a.mp4?host=x.blob.core.windows.net",
+        ):
+            self.assertNotIn("x-ms-blob-type", presigned_put_headers(lookalike, "video/mp4"), lookalike)
 
     def test_upload_rejects_non_file_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

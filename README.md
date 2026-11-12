@@ -59,6 +59,8 @@ Outputs:
 
 The upload node is marked as an output node so its manifest can appear in ComfyUI history.
 
+Upload URLs may be S3, R2, or Azure Blob SAS URLs. When the URL host ends with `.blob.core.windows.net`, the upload nodes also send `x-ms-blob-type: BlockBlob`, which Azure requires on a SAS `PUT`. Other hosts get only `content-type`.
+
 ## Install
 
 Clone this repository into ComfyUI's `custom_nodes` directory:
