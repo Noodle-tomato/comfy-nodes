@@ -13,6 +13,9 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 
+AZURE_BLOB_HOST_SUFFIX = ".blob.core.windows.net"
+
+
 class PresignedIoError(RuntimeError):
     """Raised when presigned URL download/upload work fails."""
 
@@ -167,7 +170,7 @@ def upload_file_to_presigned_url(
 
     body = path.read_bytes()
     resolved_content_type = normalize_content_type(content_type or guess_content_type(path))
-    headers = {"content-type": resolved_content_type} if resolved_content_type else {}
+    headers = presigned_put_headers(put_url, resolved_content_type)
     http = transport or UrllibTransport()
     response = http.put(put_url, body, headers, timeout_seconds)
     if response.status_code < 200 or response.status_code >= 300:
@@ -200,7 +203,7 @@ def upload_bytes_to_presigned_url(
     body = bytes(data)
     safe_filename = sanitize_filename(filename)
     resolved_content_type = normalize_content_type(content_type or guess_content_type(Path(safe_filename)))
-    headers = {"content-type": resolved_content_type} if resolved_content_type else {}
+    headers = presigned_put_headers(put_url, resolved_content_type)
     http = transport or UrllibTransport()
     response = http.put(put_url, body, headers, timeout_seconds)
     if response.status_code < 200 or response.status_code >= 300:
@@ -214,6 +217,19 @@ def upload_bytes_to_presigned_url(
         "public_url": public_url,
     }
     return json.dumps(manifest, sort_keys=True)
+
+
+def is_azure_blob_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").rstrip(".")
+    return host.endswith(AZURE_BLOB_HOST_SUFFIX)
+
+
+def presigned_put_headers(put_url: str, content_type: str) -> dict[str, str]:
+    """Headers for a presigned PUT. Azure Blob rejects a SAS PUT without a blob type."""
+    headers = {"content-type": content_type} if content_type else {}
+    if is_azure_blob_url(put_url):
+        headers["x-ms-blob-type"] = "BlockBlob"
+    return headers
 
 
 def resolve_file_path(value: str, search_directories: list[Path]) -> Path:

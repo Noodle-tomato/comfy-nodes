@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import nt_presigned_io
-from nt_presigned_io.core import DownloadBytesResult, DownloadResult
+from nt_presigned_io.core import DownloadBytesResult, DownloadResult, HttpResponse
 from nt_presigned_io.nodes import (
     NTDownloadFileFromPresignedURL,
     NTEncodeAndUploadVideoToPresignedURL,
@@ -172,6 +172,40 @@ class NodeRegistrationTest(unittest.TestCase):
             timeout_seconds=600.0,
         )
 
+
+    def test_encode_and_upload_video_node_sends_block_blob_type_to_azure(self) -> None:
+        class FakeVideo:
+            def save_to(self, target):
+                target.write(b"mp4-bytes")
+
+        put_calls = []
+
+        class RecordingTransport:
+            def put(self, url, data, headers, timeout_seconds):
+                put_calls.append({"url": url, "data": data, "headers": dict(headers)})
+                return HttpResponse(status_code=201, body=b"", headers={})
+
+        put_url = "https://stntstgyquuey.blob.core.windows.net/media/out/clip.mp4?sv=2025-01-05&sig=secret"
+        with patch("nt_presigned_io.core.UrllibTransport", RecordingTransport):
+            result = NTEncodeAndUploadVideoToPresignedURL().encode_and_upload(
+                video=FakeVideo(),
+                put_url=put_url,
+                filename="clip.mp4",
+                content_type="video/mp4",
+                timeout_seconds=600,
+            )
+
+        self.assertEqual(result[1:], ("uploaded", 9))
+        self.assertEqual(
+            put_calls,
+            [
+                {
+                    "url": put_url,
+                    "data": b"mp4-bytes",
+                    "headers": {"content-type": "video/mp4", "x-ms-blob-type": "BlockBlob"},
+                }
+            ],
+        )
 
 if __name__ == "__main__":
     unittest.main()
